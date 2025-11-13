@@ -74,20 +74,20 @@ services:
       RABBITMQ_URL: amqp://root:root@rabbitmq/
       REDIS_HOST: redis
   
-  test_qu:
-    build: ./test_qu
-    container_name: test_qu
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      db:
-        condition: service_healthy
-    environment:
-      RABBITMQ_URL: amqp://root:root@rabbitmq/
-      REDIS_HOST: redis
-    ports:
-      - "8003:8000"
-    volumes:
-      - ./test_qu:/app
+  # test_qu:
+  #   build: ./test_qu
+  #   container_name: test_qu
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #     db:
+  #       condition: service_healthy
+  #   environment:
+  #     RABBITMQ_URL: amqp://root:root@rabbitmq/
+  #     REDIS_HOST: redis
+  #   ports:
+  #     - "8003:8000"
+  #   volumes:
+  #     - ./test_qu:/app
