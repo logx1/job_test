@@ -4,3 +4,6 @@ redis[asyncio]==5.0.1
 aio-pika==9.2.3
 pyjwt==2.8.0
 pydantic==2.8.2
+mysql-connector-python==8.4.0
+passlib==1.7.4
+SQLAlchemy==2.0.31

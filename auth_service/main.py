@@ -1,68 +1,76 @@
-from fastapi import FastAPI, HTTPException
+import os
+import asyncio
+import jwt
+from fastapi import FastAPI, Depends, HTTPException, Header
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.declarative import declarative_base
 from pydantic import BaseModel
-import jwt, asyncio, os
-import pika
+from passlib.context import CryptContext
 from redis.asyncio import Redis
 
-app = FastAPI()
-
-SECRET_KEY = "supersecret"
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
+# --- Configuration ---
+SECRET_KEY = os.getenv("SECRET_KEY", "supersecret")
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_USER = os.getenv("MYSQL_USER", "app_user")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "app_password")
+MYSQL_DB = os.getenv("MYSQL_DB", "app_db")
 
+SQLALCHEMY_DATABASE_URL = f"mysql+mysqlconnector://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}/{MYSQL_DB}"
+
+# --- Initialization ---
+app = FastAPI()
 redis = Redis(host=REDIS_HOST, port=6379, decode_responses=True)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+# --- Database ---
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True)
+    hashed_password = Column(String(255))
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# --- Schemas ---
 class LoginRequest(BaseModel):
     username: str
     password: str
 
-
-@app.on_event("startup")
-async def startup():
-    # Initialize RabbitMQ connection and channel
-    def init_rabbitmq():
-        connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
-        channel = connection.channel()
-        channel.queue_declare(queue="user_queue")
-        return connection, channel
-
-    app.rabbit_conn, app.channel = await asyncio.to_thread(init_rabbitmq)
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    # Close RabbitMQ connection on shutdown
-    def close_rabbitmq():
-        app.channel.close()
-        app.rabbit_conn.close()
-
-    await asyncio.to_thread(close_rabbitmq)
-
-
+# --- Endpoints ---
 @app.post("/login")
-async def login(data: LoginRequest):
-    if data.username == "admin" and data.password == "1234":
-        token = jwt.encode({"user": data.username}, SECRET_KEY, algorithm="HS256")
-        await redis.set(f"token:{data.username}", token)
-        return {"token": token}
-    raise HTTPException(status_code=401, detail="Invalid credentials")
+async def login(data: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == data.username).first()
+    if not user or not pwd_context.verify(data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    token = jwt.encode({"user": data.username}, SECRET_KEY, algorithm="HS256")
+    await redis.set(f"token:{data.username}", token)
+    return {"token": token}
 
+@app.post("/logout")
+async def logout(authorization: str = Header(...)):
+    try:
+        token = authorization.split(" ")[1]
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        username = payload.get("user")
+        if await redis.delete(f"token:{username}"):
+            return {"status": "logout successful"}
+        raise HTTPException(status_code=400, detail="User not logged in or token expired")
+    except (jwt.PyJWTError, IndexError):
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-@app.post("/send")
-async def send_message(username: str):
-    token = await redis.get(f"token:{username}")
-    if not token:
-        raise HTTPException(status_code=401, detail="User not logged in")
-
-    message = f"Hello from {username}"
-
-    # Publish message to RabbitMQ
-    def publish_message():
-        app.channel.basic_publish(
-            exchange="",
-            routing_key="user_queue",
-            body=message,
-        )
-
-    await asyncio.to_thread(publish_message)
-    return {"status": "sent", "message": message}
+# --- Startup ---
+@app.on_event("startup")
+async def startup_event():
+    Base.metadata.create_all(bind=engine)

@@ -57,6 +57,12 @@ services:
     environment:
       RABBITMQ_URL: amqp://root:root@rabbitmq/
       REDIS_HOST: redis
+      MYSQL_HOST: db
+      MYSQL_USER: app_user
+      MYSQL_PASSWORD: app_password
+      MYSQL_DB: app_db
+    volumes:
+      - ./auth_service:/app
 
   user_service:
     build: ./user_service
@@ -73,6 +79,12 @@ services:
     environment:
       RABBITMQ_URL: amqp://root:root@rabbitmq/
       REDIS_HOST: redis
+      MYSQL_HOST: db
+      MYSQL_USER: app_user
+      MYSQL_PASSWORD: app_password
+      MYSQL_DB: app_db
+    volumes:
+      - ./user_service:/app
   
   # test_qu:
   #   build: ./test_qu
