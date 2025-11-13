@@ -1,6 +1,7 @@
 import os
 import asyncio
 import jwt
+import pika
 from fastapi import FastAPI, Depends, HTTPException, Header
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker, Session
@@ -16,6 +17,7 @@ MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_USER = os.getenv("MYSQL_USER", "app_user")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "app_password")
 MYSQL_DB = os.getenv("MYSQL_DB", "app_db")
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://root:root@localhost/")
 
 SQLALCHEMY_DATABASE_URL = f"mysql+mysqlconnector://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}/{MYSQL_DB}"
 
@@ -74,3 +76,28 @@ async def logout(authorization: str = Header(...)):
 @app.on_event("startup")
 async def startup_event():
     Base.metadata.create_all(bind=engine)
+
+
+
+
+def callback(ch, method, properties, body):
+    print(f"[Receiver] Received: {body.decode()}")
+    # Acknowledge the message
+    ch.basic_ack(delivery_tag=method.delivery_tag)
+
+def receive_messages():
+    parameters = pika.URLParameters(RABBITMQ_URL)
+    connection = pika.BlockingConnection(parameters)
+    channel = connection.channel()
+    channel.queue_declare(queue='user_events', durable=True)
+
+    print("[Receiver] Waiting for messages. To exit, press CTRL+C")
+    channel.basic_consume(queue='user_events', on_message_callback=callback)
+
+    
+    channel.start_consuming()
+
+@app.on_event("startup")
+def start_message_receiver():
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, receive_messages)
