@@ -72,20 +72,35 @@ async def logout(authorization: str = Header(...)):
     except (jwt.PyJWTError, IndexError):
         raise HTTPException(status_code=401, detail="Invalid token")
 
-# --- Startup ---
-@app.on_event("startup")
-async def startup_event():
-    Base.metadata.create_all(bind=engine)
+@app.get("/last")
+async def get_last_message():
+    """
+    Retrieve the last message pulled from RabbitMQ and stored in Redis.
+    """
+    last_message = await redis.get("last_message")
+    if not last_message:
+        raise HTTPException(status_code=404, detail="No messages found")
+    return {"last_message": last_message}
 
-
-
-
+# --- RabbitMQ Consumer ---
 def callback(ch, method, properties, body):
-    print(f"[Receiver] Received: {body.decode()}")
-    # Acknowledge the message
+    """
+    Callback function for RabbitMQ message consumption.
+    Stores the received message in Redis under the key 'last_message'.
+    """
+    message = body.decode()
+    print(f"[Receiver] Received: {message}")
+    
+    # Use a separate Redis connection for RabbitMQ
+    redis_consumer = Redis(host=REDIS_HOST, port=6379, decode_responses=True)
+    asyncio.run(redis_consumer.set("last_message", message))
+    asyncio.run(redis_consumer.close())  # Close the Redis connection
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 def receive_messages():
+    """
+    Connect to RabbitMQ and start consuming messages from the 'user_events' queue.
+    """
     parameters = pika.URLParameters(RABBITMQ_URL)
     connection = pika.BlockingConnection(parameters)
     channel = connection.channel()
@@ -93,9 +108,12 @@ def receive_messages():
 
     print("[Receiver] Waiting for messages. To exit, press CTRL+C")
     channel.basic_consume(queue='user_events', on_message_callback=callback)
-
-    
     channel.start_consuming()
+
+# --- Startup ---
+@app.on_event("startup")
+async def startup_event():
+    Base.metadata.create_all(bind=engine)
 
 @app.on_event("startup")
 def start_message_receiver():
