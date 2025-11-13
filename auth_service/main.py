@@ -1,13 +1,13 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import jwt, asyncio, os
-import aio_pika
+import pika
 from redis.asyncio import Redis
 
 app = FastAPI()
 
 SECRET_KEY = "supersecret"
-RABBITMQ_URL = os.getenv("RABBITMQ_URL")
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 
 redis = Redis(host=REDIS_HOST, port=6379, decode_responses=True)
@@ -19,9 +19,24 @@ class LoginRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup():
-    app.rabbit_conn = await aio_pika.connect_robust(RABBITMQ_URL)
-    app.channel = await app.rabbit_conn.channel()
-    await app.channel.declare_queue("user_queue")
+    # Initialize RabbitMQ connection and channel
+    def init_rabbitmq():
+        connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
+        channel = connection.channel()
+        channel.queue_declare(queue="user_queue")
+        return connection, channel
+
+    app.rabbit_conn, app.channel = await asyncio.to_thread(init_rabbitmq)
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    # Close RabbitMQ connection on shutdown
+    def close_rabbitmq():
+        app.channel.close()
+        app.rabbit_conn.close()
+
+    await asyncio.to_thread(close_rabbitmq)
 
 
 @app.post("/login")
@@ -40,7 +55,14 @@ async def send_message(username: str):
         raise HTTPException(status_code=401, detail="User not logged in")
 
     message = f"Hello from {username}"
-    await app.channel.default_exchange.publish(
-        aio_pika.Message(body=message.encode()), routing_key="user_queue"
-    )
+
+    # Publish message to RabbitMQ
+    def publish_message():
+        app.channel.basic_publish(
+            exchange="",
+            routing_key="user_queue",
+            body=message,
+        )
+
+    await asyncio.to_thread(publish_message)
     return {"status": "sent", "message": message}
